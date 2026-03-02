@@ -1,0 +1,24 @@
+{
+  "name": "sentinel-d-sre-agent",
+  "version": "1.0.0",
+  "description": "SRE Agent: Service Bus consumer, KQL generation, telemetry classification",
+  "main": "consumer.js",
+  "scripts": {
+    "prebuild": "node -e \"const fs=require('fs');['telemetry_classification.json','webhook_payload.json'].forEach(f=>fs.cpSync('../../shared/schemas/'+f,'schemas/'+f))\"",
+    "build": "npm run prebuild",
+    "start": "node consumer.js",
+    "test": "jest --verbose",
+    "test:watch": "jest --watch"
+  },
+  "dependencies": {
+    "@azure/identity": "^4.0.0",
+    "@azure/monitor-query": "^1.3.0",
+    "@azure/service-bus": "^7.9.0",
+    "ajv": "^8.12.0",
+    "ajv-formats": "^2.1.1",
+    "dotenv": "^17.0.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}
