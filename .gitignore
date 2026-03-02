@@ -39,3 +39,9 @@ validation_bundle.json
 
 # Dependencies
 node_modules/
+
+# Copilot setup files
+.copilot/
+COPILOT-SETUP.md
+sentinel-d-copilot/
+sentinel-d-copilot-setup.zip
