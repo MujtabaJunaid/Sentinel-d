@@ -6,18 +6,23 @@ const addFormats = require("ajv-formats");
 const path = require("path");
 const fs = require("fs");
 
-// Load webhook payload schema
-// When deployed, __dirname is the functions directory; resolve relative to repo root
-const schemaPath = path.resolve(
-  __dirname,
-  "../../../../shared/schemas/webhook_payload.json"
-);
-const webhookSchema = JSON.parse(fs.readFileSync(schemaPath, "utf-8"));
+// Load webhook payload schema with graceful error handling
+let webhookSchema;
+let validate;
+let schemaLoadError;
 
-// Set up AJV validator
-const ajv = new Ajv({ allErrors: true });
-addFormats(ajv);
-const validate = ajv.compile(webhookSchema);
+try {
+  const schemaPath = path.resolve(
+    __dirname,
+    "../../../../shared/schemas/webhook_payload.json"
+  );
+  webhookSchema = JSON.parse(fs.readFileSync(schemaPath, "utf-8"));
+  const ajv = new Ajv({ allErrors: true });
+  addFormats(ajv);
+  validate = ajv.compile(webhookSchema);
+} catch (err) {
+  schemaLoadError = `Schema initialization failed: ${err.message}`;
+}
 
 // Service Bus config from environment
 const SB_NAMESPACE = process.env.SERVICE_BUS_NAMESPACE;
@@ -44,6 +49,17 @@ async function sendToServiceBus(payload) {
 }
 
 async function handler(request, context) {
+  // Fail fast if schema failed to load
+  if (schemaLoadError) {
+    return {
+      status: 400,
+      jsonBody: {
+        error: "SERVICE_UNAVAILABLE",
+        detail: schemaLoadError,
+      },
+    };
+  }
+
   // Validate Content-Type
   const contentType = request.headers.get("content-type") || "";
   if (!contentType.includes("application/json")) {
@@ -103,7 +119,7 @@ async function handler(request, context) {
     return {
       status: 400,
       jsonBody: {
-        error: "Message delivery failed",
+        error: "SERVICE_BUS_ERROR",
         detail: err.message,
       },
     };
