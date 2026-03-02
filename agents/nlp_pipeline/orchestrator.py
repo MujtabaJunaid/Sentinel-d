@@ -2,11 +2,12 @@
 
 import asyncio
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from agents.nlp_pipeline.fetchers import NVDFetcher, StackOverflowFetcher
 from agents.nlp_pipeline.ml_models import EntityExtractor, IntentClassifier
+from agents.historical_db.reader import HistoricalDBReader
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -26,13 +27,19 @@ class NLPContextOrchestrator:
 
     PIPELINE_VERSION = "1.0.0"
 
-    def __init__(self, nvd_api_key: Optional[str] = None):
+    def __init__(
+        self,
+        historical_db_reader: HistoricalDBReader,
+        nvd_api_key: Optional[str] = None
+    ):
         """
-        Initialize the orchestrator with fetchers and ML models.
+        Initialize the orchestrator with fetchers, ML models, and historical DB reader.
 
         Args:
+            historical_db_reader: Historical DB reader for RAG data retrieval.
             nvd_api_key: Optional API key for NVD API.
         """
+        self.historical_db_reader = historical_db_reader
         self.nvd_fetcher = NVDFetcher(api_key=nvd_api_key)
         self.stackoverflow_fetcher = StackOverflowFetcher()
         self.entity_extractor = EntityExtractor()
@@ -88,7 +95,16 @@ class NLPContextOrchestrator:
         logger.debug("Classifying community intent from StackOverflow text")
         community_intent_class, intent_confidence = self.intent_classifier.classify(stackoverflow_text)
 
-        # Step 5: Assemble structured context
+        # Step 5: Historical DB lookup for RAG data
+        logger.debug("Performing historical database lookup")
+        historical_match = await self.historical_db_reader.lookup(
+            event_id=event_id,
+            cve_id=cve_id,
+            description=nvd_text,
+            affected_package=affected_package
+        )
+
+        # Step 6: Assemble structured context
         structured_context = self._assemble_context(
             event_id=event_id,
             cve_id=cve_id,
@@ -98,7 +114,8 @@ class NLPContextOrchestrator:
             migration_steps=migration_steps,
             community_intent_class=community_intent_class,
             intent_confidence=intent_confidence,
-            webhook_payload=webhook_payload
+            webhook_payload=webhook_payload,
+            historical_match=historical_match
         )
 
         logger.info(f"Successfully assembled context for event_id: {event_id}")
@@ -136,7 +153,8 @@ class NLPContextOrchestrator:
         migration_steps: List[str],
         community_intent_class: str,
         intent_confidence: float,
-        webhook_payload: Dict[str, Any]
+        webhook_payload: Dict[str, Any],
+        historical_match: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
         Assemble the final structured context dictionary.
@@ -151,10 +169,20 @@ class NLPContextOrchestrator:
             community_intent_class: Classified community intent.
             intent_confidence: Confidence score for intent classification.
             webhook_payload: Original webhook payload.
+            historical_match: Historical DB lookup results.
 
         Returns:
             Structured context dictionary matching the output schema.
         """
+        # Extract solutions_to_avoid from historical match (list of dicts with strategy and failure_reason)
+        solutions_to_avoid = [
+            {
+                "strategy": sol.get("strategy", ""),
+                "failure_reason": sol.get("failure_reason", "")
+            }
+            for sol in historical_match.get("solutions_tried_previously", [])
+        ]
+
         structured_context: Dict[str, Any] = {
             "event_id": event_id,
             "fix_strategy": self._determine_fix_strategy(community_intent_class),
@@ -167,15 +195,10 @@ class NLPContextOrchestrator:
                 "auth_required": False
             },
             "migration_steps": migration_steps,
-            # Mock values for historical DB integration (to be updated later)
-            "historical_match_status": "NO_HISTORICAL_MATCH",
-            "historical_patch_available": False,
-            "historical_record_id": None,
-            "solutions_to_avoid": [
-                "Avoid using deprecated parseXML() function",
-                "Do not downgrade to versions before 2.5.0",
-                "Avoid parallel execution without proper locking mechanism"
-            ],
+            "historical_match_status": historical_match.get("lookup_status", "NO_MATCH"),
+            "historical_patch_available": historical_match.get("replay_eligible", False),
+            "historical_record_id": historical_match.get("matched_record_id", None),
+            "solutions_to_avoid": solutions_to_avoid,
             "pipeline_version": self.PIPELINE_VERSION,
             "timestamp": datetime.utcnow().isoformat()
         }
@@ -256,5 +279,3 @@ class NLPContextOrchestrator:
         return ""
 
 
-# Type import
-from typing import Optional
