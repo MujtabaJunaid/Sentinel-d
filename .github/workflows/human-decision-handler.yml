@@ -31,6 +31,7 @@ jobs:
         env:
           SERVICE_BUS_NAMESPACE: ${{ secrets.SERVICE_BUS_NAMESPACE }}
           SERVICE_BUS_QUEUE_NAME: ${{ secrets.SERVICE_BUS_QUEUE_NAME }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
         run: |
           node -e "
             const { handleFixNow } = require('./safety-governor/handlers/fix-now');
@@ -39,8 +40,6 @@ jobs:
               .then(r => console.log(JSON.stringify({ message: 'fix-now processed', ...r })))
               .catch(e => { console.error(e.message); process.exit(1); });
           "
-        env:
-          ISSUE_BODY: ${{ github.event.issue.body }}
 
       - name: Comment and close issue
         uses: actions/github-script@v7
