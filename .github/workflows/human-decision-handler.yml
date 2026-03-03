@@ -1,0 +1,46 @@
+name: Human Decision Gate Label Handler
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  handle-decision:
+    runs-on: ubuntu-latest
+    if: |
+      github.event.label.name == 'sentinel/fix-now' ||
+      github.event.label.name == 'sentinel/defer' ||
+      github.event.label.name == 'sentinel/wont-fix'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Parse issue body
+        id: parse
+        run: |
+          alert_id=$(echo "${{ github.event.issue.body }}" | grep "Alert ID:" | cut -d: -f2 | xargs)
+          echo "alert_id=$alert_id" >> $GITHUB_OUTPUT
+      
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      
+      - name: Process fix-now decision
+        if: github.event.label.name == 'sentinel/fix-now'
+        run: |
+          echo "Processing fix-now for ${{ steps.parse.outputs.alert_id }}"
+          # TODO: Trigger patch generation pipeline
+      
+      - name: Process defer decision
+        if: github.event.label.name == 'sentinel/defer'
+        run: |
+          echo "Deferring ${{ steps.parse.outputs.alert_id }}"
+          # TODO: Write to deferred backlog (Azure Table Storage)
+      
+      - name: Process wont-fix decision
+        if: github.event.label.name == 'sentinel/wont-fix'
+        run: |
+          echo "Marking wont-fix for ${{ steps.parse.outputs.alert_id }}"
+          # TODO: Write ACCEPTED_RISK record to Cosmos DB

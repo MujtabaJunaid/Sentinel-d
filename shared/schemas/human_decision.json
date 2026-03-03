@@ -1,0 +1,45 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Human Decision",
+  "description": "Decision from Human-in-the-Loop gate via GitHub Issue labels",
+  "type": "object",
+  "required": [
+    "event_id",
+    "decision",
+    "decided_by",
+    "decided_at",
+    "github_issue_url",
+    "auto_escalated"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["FIX_NOW", "DEFER", "WONT_FIX", "ESCALATED"]
+    },
+    "decided_by": {
+      "type": "string"
+    },
+    "decided_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "annotation": {
+      "type": ["string", "null"]
+    },
+    "defer_until": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "github_issue_url": {
+      "type": "string"
+    },
+    "auto_escalated": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false
+}

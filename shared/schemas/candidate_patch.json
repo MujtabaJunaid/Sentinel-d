@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Candidate Patch",
+  "description": "DEV A OWNS THIS — Patch Generator output consumed by Sandbox Validator",
+  "type": "object",
+  "required": [
+    "event_id",
+    "status",
+    "source",
+    "files_modified",
+    "lines_changed",
+    "touches_auth_crypto",
+    "llm_confidence",
+    "model_id"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["PATCH_GENERATED", "CANNOT_PATCH"]
+    },
+    "source": {
+      "type": "string",
+      "enum": ["FOUNDRY", "RAG_REPLAY"]
+    },
+    "diff": {
+      "type": ["string", "null"]
+    },
+    "files_modified": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "lines_changed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "touches_auth_crypto": {
+      "type": "boolean"
+    },
+    "llm_confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "reasoning_chain": {
+      "type": ["string", "null"]
+    },
+    "model_id": {
+      "type": "string"
+    },
+    "cannot_patch_reason": {
+      "type": ["string", "null"]
+    }
+  },
+  "additionalProperties": false
+}

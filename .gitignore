@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Azure
+local.settings.json
+.azure/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+*.env
+.env.local
+
+# Test artifacts
+test_results.json
+*.png
+diff.png
+validation_bundle.json
+
+# Logs
+*.log
+
+# Dependencies
+node_modules/
+
+# Copilot setup files
+.copilot/
+.github/copilot-instructions.md
+COPILOT-SETUP.md
+sentinel-d-copilot/
+sentinel-d-copilot-setup.zip

@@ -1,0 +1,26 @@
+{
+  "name": "sentinel-d",
+  "version": "1.0.0",
+  "description": "Sentinel-D is an autonomous DevSecOps pipeline that automatically detects, validates, and remediates security vulnerabilities in code repositories.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BilalAsifB/Sentinel-d.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/BilalAsifB/Sentinel-d/issues"
+  },
+  "homepage": "https://github.com/BilalAsifB/Sentinel-d#readme",
+  "dependencies": {
+    "@azure/identity": "^4.13.0",
+    "@azure/service-bus": "^7.9.5",
+    "dotenv": "^17.3.1"
+  }
+}

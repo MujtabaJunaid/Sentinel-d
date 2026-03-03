@@ -1,0 +1,82 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Historical DB Record",
+  "description": "Cosmos DB document written after Safety Governor resolution",
+  "type": "object",
+  "required": [
+    "id",
+    "cve_id",
+    "affected_package",
+    "affected_version_range",
+    "cve_description_embedding",
+    "fix_strategy_used",
+    "patch_diff",
+    "patch_outcome",
+    "solutions_tried",
+    "repo",
+    "language",
+    "framework",
+    "resolved_at",
+    "resolved_by",
+    "human_override",
+    "pipeline_version"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "cve_id": {
+      "type": "string"
+    },
+    "affected_package": {
+      "type": "string"
+    },
+    "affected_version_range": {
+      "type": "string"
+    },
+    "cve_description_embedding": {
+      "type": "array",
+      "items": { "type": "number" }
+    },
+    "fix_strategy_used": {
+      "type": "string"
+    },
+    "patch_diff": {
+      "type": "string"
+    },
+    "patch_outcome": {
+      "type": "string",
+      "enum": ["SUCCESS", "PARTIAL", "FAILED", "ACCEPTED_RISK"]
+    },
+    "failure_reason": {
+      "type": ["string", "null"]
+    },
+    "solutions_tried": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "repo": {
+      "type": "string"
+    },
+    "language": {
+      "type": "string"
+    },
+    "framework": {
+      "type": "string"
+    },
+    "resolved_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "resolved_by": {
+      "type": "string"
+    },
+    "human_override": {
+      "type": "boolean"
+    },
+    "pipeline_version": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

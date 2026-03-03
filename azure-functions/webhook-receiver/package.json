@@ -1,0 +1,24 @@
+{
+  "name": "sentinel-d-webhook-receiver",
+  "version": "1.0.0",
+  "description": "Azure Function webhook receiver for GHAS alerts",
+  "main": "src/functions/webhook-receiver.js",
+  "scripts": {
+    "prebuild": "node -e \"require('fs').cpSync('../../shared/schemas/webhook_payload.json','schemas/webhook_payload.json')\"",
+    "build": "npm run prebuild",
+    "prestart": "npm run prebuild",
+    "start": "func start",
+    "test": "jest --verbose",
+    "test:watch": "jest --watch"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.0.0",
+    "@azure/identity": "^4.0.0",
+    "@azure/service-bus": "^7.9.0",
+    "ajv": "^8.12.0",
+    "ajv-formats": "^2.1.1"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}

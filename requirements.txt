@@ -1,8 +1,15 @@
+# Azure SDK
+azure-identity
+azure-core
+
 # Async Network & API Calls
 aiohttp>=3.9.0
 
 # Environment Configuration
 python-dotenv>=1.0.0
+
+# Common utilities
+jsonschema
 
 # Machine Learning & NLP (Dev A Domain)
 spacy>=3.7.0

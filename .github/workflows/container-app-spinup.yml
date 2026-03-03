@@ -1,0 +1,74 @@
+name: Container App Spin-Up for Sandbox Testing
+
+on:
+  workflow_dispatch:
+    inputs:
+      alert_id:
+        description: 'Alert ID to validate'
+        required: true
+      patch_url:
+        description: 'URL to candidate patch'
+        required: true
+
+env:
+  AZURE_CONTAINER_APP_NAME: sentinel-sandbox-${{ github.run_id }}
+  AZURE_RESOURCE_GROUP: sentinel-sandboxes
+  AZURE_LOCATION: eastus
+
+jobs:
+  sandbox-validation:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      
+      - name: Create Container App
+        run: |
+          az containerapp create \
+            --name ${{ env.AZURE_CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --environment sentinel-env \
+            --image mcr.microsoft.com/azuredocs/containerapps-helloworld:latest \
+            --target-port 80 \
+            --ingress external \
+            --cpu 0.5 \
+            --memory 1.0Gi
+      
+      - name: Download and apply patch
+        run: |
+          curl -o candidate.patch ${{ github.event.inputs.patch_url }}
+          git apply candidate.patch
+      
+      - name: Install dependencies
+        run: |
+          npm ci
+      
+      - name: Run tests
+        id: tests
+        run: |
+          npm test -- --json --outputFile=test_results.json
+        continue-on-error: true
+      
+      - name: Run visual regression
+        run: |
+          python sandbox-validator/validator.py
+      
+      - name: Upload validation results
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-bundle-${{ github.event.inputs.alert_id }}
+          path: validation_bundle.json
+      
+      - name: Tear down Container App
+        if: always()
+        run: |
+          az containerapp delete \
+            --name ${{ env.AZURE_CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --yes

@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Webhook Payload",
+  "description": "Incoming GHAS alert payload received by the Azure Function webhook receiver",
+  "type": "object",
+  "required": [
+    "event_id",
+    "cve_id",
+    "severity",
+    "affected_package",
+    "current_version",
+    "fix_version_range",
+    "file_path",
+    "line_range",
+    "repo",
+    "timestamp"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "cve_id": {
+      "type": "string"
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+    },
+    "affected_package": {
+      "type": "string"
+    },
+    "current_version": {
+      "type": "string"
+    },
+    "fix_version_range": {
+      "type": "string"
+    },
+    "file_path": {
+      "type": "string"
+    },
+    "line_range": {
+      "type": "array",
+      "items": { "type": "integer" },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "repo": {
+      "type": "string"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}
