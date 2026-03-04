@@ -46,4 +46,9 @@ node_modules/
 .github/copilot-instructions.md
 COPILOT-SETUP.md
 sentinel-d-copilot/
-sentinel-d-copilot-setup.zip
+sentinel-d-copilot-setup.zip*.zip
+distilbert-intent-classifier-v1/
+spacy-nvd-ner-v1/
+*.zip
+distilbert-intent-classifier-v1/
+spacy-nvd-ner-v1/
