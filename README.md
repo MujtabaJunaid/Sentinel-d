@@ -21,7 +21,10 @@ GHAS alert → Azure Function → Service Bus → SRE Agent → Human Decision G
 - **Historical DB**: Cosmos DB write client, Azure AI Search indexing
 
 ### Dev A Components (ML/NLP)
-- **NLP Pipeline**: spaCy NER, DistilBERT intent classifier, embedding generation
+- **NLP Pipeline**: spaCy NER, DistilBERT intent classifier, embedding generation.
+  Link to models:
+  1) https://huggingface.co/mojad121/spacy-classes-finetune/tree/main
+  2) https://huggingface.co/mojad121/distill-bert-intent-classifer/tree/main 
 - **Patch Generator**: FOUNDRY/RAG replay, four-section prompt design, composite scoring
 
 ### Shared Components
