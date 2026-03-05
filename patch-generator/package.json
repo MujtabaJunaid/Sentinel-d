@@ -1,0 +1,15 @@
+{
+  "name": "sentinel-d-patch-generator",
+  "version": "1.0.0",
+  "description": "Patch Generator — Foundry API client for generating candidate patches",
+  "main": "foundry-client.js",
+  "scripts": {
+    "test": "jest --verbose"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "sentinel-d-dead-letter-handler",
+  "version": "1.0.0",
+  "description": "Azure Function timer trigger for processing dead-letter queue messages",
+  "main": "src/functions/dead-letter-handler.js",
+  "scripts": {
+    "start": "func start",
+    "test": "jest --verbose"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.0.0",
+    "@azure/identity": "^4.0.0",
+    "@azure/service-bus": "^7.9.0",
+    "@octokit/rest": "^20.0.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}

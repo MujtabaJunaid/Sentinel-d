@@ -19,6 +19,7 @@ from kql_generator import generate_kql
 from kql_validator import validate_kql
 from telemetry_query import query_telemetry
 from classifier import classify
+from router import route_classification
 
 load_dotenv()
 
@@ -111,6 +112,18 @@ async def start_consumer() -> None:
                             event.get("event_id"),
                             classification["status"],
                         )
+
+                        # Route to downstream system based on classification
+                        route_result = await route_classification(
+                            classification, event
+                        )
+                        logger.info(
+                            "Routed event_id=%s → %s (%s)",
+                            event.get("event_id"),
+                            route_result["destination"],
+                            route_result["detail"],
+                        )
+
                         await receiver.complete_message(message)
                     except Exception as exc:
                         logger.error(
