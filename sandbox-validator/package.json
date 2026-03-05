@@ -1,0 +1,16 @@
+{
+  "name": "sentinel-d-sandbox-validator",
+  "version": "1.0.0",
+  "description": "Sandbox validation: Puppeteer screenshot capture and SSIM visual regression",
+  "main": "capture-baseline.js",
+  "scripts": {
+    "capture": "node capture-baseline.js",
+    "test": "jest --verbose"
+  },
+  "dependencies": {
+    "puppeteer": "^22.0.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}
