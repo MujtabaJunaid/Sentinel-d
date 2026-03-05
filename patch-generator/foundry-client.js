@@ -17,6 +17,8 @@
 
 require("dotenv").config();
 
+const { withRetry } = require("../shared/retry");
+
 const FOUNDRY_ENDPOINT = process.env.FOUNDRY_ENDPOINT;
 const FOUNDRY_API_KEY = process.env.FOUNDRY_API_KEY;
 
@@ -39,18 +41,28 @@ async function generatePatch(structuredContext) {
 
   if (endpoint && apiKey) {
     try {
-      const response = await fetch(`${endpoint}/v1/patches/generate`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          context: structuredContext,
-          // Dev A will fill in the real prompt sections
-          prompt_version: "skeleton-v1",
-        }),
-      });
+      const response = await withRetry(
+        () =>
+          fetch(`${endpoint}/v1/patches/generate`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+              context: structuredContext,
+              prompt_version: "skeleton-v1",
+            }),
+          }).then((res) => {
+            if (res.status === 429 || res.status === 503 || res.status === 504) {
+              const err = new Error(`Foundry API error: ${res.status}`);
+              err.statusCode = res.status;
+              throw err;
+            }
+            return res;
+          }),
+        { label: "foundry-api", maxAttempts: 3 }
+      );
 
       const elapsedMs = Date.now() - startTime;
       logResponseTime(structuredContext.event_id, elapsedMs);

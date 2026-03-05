@@ -8,6 +8,7 @@
  */
 
 const { Octokit } = require("@octokit/rest");
+const { withRetry } = require("../shared/retry");
 require("dotenv").config();
 
 /**
@@ -150,7 +151,10 @@ async function createEscalationIssue(event, compositeScore, validationBundle, ca
     issueParams.assignees = [ONCALL_GITHUB_LOGIN];
   }
 
-  const { data: issue } = await octokit.rest.issues.create(issueParams);
+  const { data: issue } = await withRetry(
+    () => octokit.rest.issues.create(issueParams),
+    { label: "github-create-escalation-issue" }
+  );
 
   // Fire PagerDuty alert if configured
   const pagerdutyAlerted = await firePagerDutyAlert(event, compositeScore);

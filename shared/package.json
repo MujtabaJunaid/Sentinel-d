@@ -1,0 +1,11 @@
+{
+  "name": "sentinel-d-shared",
+  "version": "1.0.0",
+  "description": "Shared utilities for Sentinel-D",
+  "scripts": {
+    "test": "jest --verbose"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}

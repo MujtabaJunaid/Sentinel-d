@@ -1,0 +1,406 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "logicAppName": {
+      "type": "string",
+      "defaultValue": "sentinel-d-backlog-rescan",
+      "metadata": {
+        "description": "Name of the daily backlog re-scan Logic App"
+      }
+    },
+    "weeklyDigestLogicAppName": {
+      "type": "string",
+      "defaultValue": "sentinel-d-weekly-digest",
+      "metadata": {
+        "description": "Name of the weekly digest Logic App"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]"
+    },
+    "githubToken": {
+      "type": "securestring",
+      "metadata": {
+        "description": "GitHub PAT with issues read/write scope"
+      }
+    },
+    "githubOwner": {
+      "type": "string"
+    },
+    "githubRepo": {
+      "type": "string"
+    },
+    "appInsightsAppId": {
+      "type": "string",
+      "metadata": {
+        "description": "Application Insights Application ID for KQL queries"
+      }
+    },
+    "appInsightsApiKey": {
+      "type": "securestring"
+    },
+    "serviceBusConnectionString": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Service Bus connection string for sending ACTIVE override messages"
+      }
+    },
+    "serviceBusQueueName": {
+      "type": "string",
+      "defaultValue": "vulnerability-events"
+    },
+    "tableStorageConnectionString": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Azure Table Storage connection string for deferredbacklog table"
+      }
+    },
+    "securityTeamLeadLogin": {
+      "type": "string",
+      "metadata": {
+        "description": "GitHub login of security team lead for 90-day escalation"
+      }
+    }
+  },
+  "variables": {
+    "githubApiBase": "https://api.github.com",
+    "appInsightsApiBase": "[concat('https://api.applicationinsights.io/v1/apps/', parameters('appInsightsAppId'))]",
+    "tableName": "deferredbacklog",
+    "daysForDigest": 30,
+    "daysForEscalation": 90
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2019-05-01",
+      "name": "[parameters('logicAppName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "state": "Enabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.0.0.0",
+          "triggers": {
+            "Daily_0600_UTC": {
+              "type": "Recurrence",
+              "recurrence": {
+                "frequency": "Day",
+                "interval": 1,
+                "schedule": {
+                  "hours": [6],
+                  "minutes": [0]
+                },
+                "timeZone": "UTC"
+              }
+            }
+          },
+          "actions": {
+            "List_Deferred_Records": {
+              "type": "Http",
+              "runAfter": {},
+              "inputs": {
+                "method": "GET",
+                "uri": "[concat('https://', split(split(parameters('tableStorageConnectionString'), 'AccountName=')[1], ';')[0], '.table.core.windows.net/', variables('tableName'), '?$filter=PartitionKey%20eq%20%27deferred%27')]",
+                "headers": {
+                  "Accept": "application/json;odata=nometadata",
+                  "x-ms-date": "@{utcNow('R')}",
+                  "x-ms-version": "2020-12-06",
+                  "DataServiceVersion": "3.0"
+                },
+                "authentication": {
+                  "type": "Raw",
+                  "value": "[parameters('tableStorageConnectionString')]"
+                }
+              }
+            },
+            "For_Each_Deferred_Record": {
+              "type": "Foreach",
+              "runAfter": {
+                "List_Deferred_Records": ["Succeeded"]
+              },
+              "foreach": "@body('List_Deferred_Records')['value']",
+              "actions": {
+                "Query_Telemetry_For_CVE": {
+                  "type": "Http",
+                  "runAfter": {},
+                  "inputs": {
+                    "method": "POST",
+                    "uri": "[concat(variables('appInsightsApiBase'), '/query')]",
+                    "headers": {
+                      "x-api-key": "[parameters('appInsightsApiKey')]",
+                      "Content-Type": "application/json"
+                    },
+                    "body": {
+                      "query": "requests | where timestamp > ago(7d) | where name contains '@{items('For_Each_Deferred_Record')['cveId']}' or customDimensions.file_path == '@{items('For_Each_Deferred_Record')['filePath']}' | summarize call_count = count()"
+                    }
+                  }
+                },
+                "Check_If_Now_Active": {
+                  "type": "If",
+                  "runAfter": {
+                    "Query_Telemetry_For_CVE": ["Succeeded"]
+                  },
+                  "expression": {
+                    "and": [
+                      {
+                        "greater": [
+                          "@int(body('Query_Telemetry_For_CVE')['tables'][0]['rows'][0][0])",
+                          0
+                        ]
+                      }
+                    ]
+                  },
+                  "actions": {
+                    "Send_Active_Override_To_Service_Bus": {
+                      "type": "Http",
+                      "runAfter": {},
+                      "inputs": {
+                        "method": "POST",
+                        "uri": "[concat('https://', parameters('serviceBusQueueName'), '.servicebus.windows.net/', parameters('serviceBusQueueName'), '/messages')]",
+                        "headers": {
+                          "Content-Type": "application/json",
+                          "BrokerProperties": "{\"Label\": \"active-override\"}"
+                        },
+                        "body": {
+                          "event_id": "@{items('For_Each_Deferred_Record')['RowKey']}",
+                          "cve_id": "@{items('For_Each_Deferred_Record')['cveId']}",
+                          "status_override": "ACTIVE",
+                          "source": "backlog-rescan",
+                          "original_payload": "@{items('For_Each_Deferred_Record')['originalPayload']}"
+                        },
+                        "authentication": {
+                          "type": "Raw",
+                          "value": "[parameters('serviceBusConnectionString')]"
+                        }
+                      }
+                    },
+                    "Delete_From_Backlog": {
+                      "type": "Http",
+                      "runAfter": {
+                        "Send_Active_Override_To_Service_Bus": ["Succeeded"]
+                      },
+                      "inputs": {
+                        "method": "DELETE",
+                        "uri": "[concat('https://', split(split(parameters('tableStorageConnectionString'), 'AccountName=')[1], ';')[0], '.table.core.windows.net/', variables('tableName'), '(PartitionKey=%27deferred%27,RowKey=%27', items('For_Each_Deferred_Record')['RowKey'], '%27)')]",
+                        "headers": {
+                          "If-Match": "*",
+                          "x-ms-version": "2020-12-06"
+                        },
+                        "authentication": {
+                          "type": "Raw",
+                          "value": "[parameters('tableStorageConnectionString')]"
+                        }
+                      }
+                    },
+                    "Log_Auto_Promoted": {
+                      "type": "Compose",
+                      "runAfter": {
+                        "Delete_From_Backlog": ["Succeeded"]
+                      },
+                      "inputs": {
+                        "message": "Auto-promoted CVE @{items('For_Each_Deferred_Record')['cveId']} from deferred to active pipeline",
+                        "event_id": "@{items('For_Each_Deferred_Record')['RowKey']}",
+                        "action": "PROMOTE_TO_ACTIVE"
+                      }
+                    }
+                  },
+                  "else": {
+                    "actions": {
+                      "Compute_Record_Age_Days": {
+                        "type": "Compose",
+                        "runAfter": {},
+                        "inputs": "@div(sub(ticks(utcNow()), ticks(items('For_Each_Deferred_Record')['createdAt'])), 864000000000)"
+                      },
+                      "Update_Last_Checked": {
+                        "type": "Http",
+                        "runAfter": {
+                          "Compute_Record_Age_Days": ["Succeeded"]
+                        },
+                        "inputs": {
+                          "method": "PATCH",
+                          "uri": "[concat('https://', split(split(parameters('tableStorageConnectionString'), 'AccountName=')[1], ';')[0], '.table.core.windows.net/', variables('tableName'), '(PartitionKey=%27deferred%27,RowKey=%27', items('For_Each_Deferred_Record')['RowKey'], '%27)')]",
+                          "headers": {
+                            "Content-Type": "application/json",
+                            "If-Match": "*",
+                            "x-ms-version": "2020-12-06"
+                          },
+                          "body": {
+                            "lastChecked": "@{utcNow()}"
+                          },
+                          "authentication": {
+                            "type": "Raw",
+                            "value": "[parameters('tableStorageConnectionString')]"
+                          }
+                        }
+                      },
+                      "Check_90_Day_Escalation": {
+                        "type": "If",
+                        "runAfter": {
+                          "Update_Last_Checked": ["Succeeded"]
+                        },
+                        "expression": {
+                          "and": [
+                            {
+                              "greaterOrEquals": [
+                                "@outputs('Compute_Record_Age_Days')",
+                                "[variables('daysForEscalation')]"
+                              ]
+                            }
+                          ]
+                        },
+                        "actions": {
+                          "Create_90_Day_Escalation_Issue": {
+                            "type": "Http",
+                            "runAfter": {},
+                            "inputs": {
+                              "method": "POST",
+                              "uri": "[concat(variables('githubApiBase'), '/repos/', parameters('githubOwner'), '/', parameters('githubRepo'), '/issues')]",
+                              "headers": {
+                                "Authorization": "[concat('Bearer ', parameters('githubToken'))]",
+                                "Accept": "application/vnd.github.v3+json",
+                                "User-Agent": "Sentinel-D-BacklogRescan"
+                              },
+                              "body": {
+                                "title": "[Sentinel-D ESCALATE] @{items('For_Each_Deferred_Record')['cveId']} deferred for 90+ days",
+                                "body": "## 🚨 90-Day Deferred Vulnerability Escalation\n\nThis vulnerability has been in the deferred backlog for over 90 days without resolution.\n\n| Field | Value |\n|-------|-------|\n| **CVE ID** | `@{items('For_Each_Deferred_Record')['cveId']}` |\n| **Event ID** | `@{items('For_Each_Deferred_Record')['RowKey']}` |\n| **Deferred Since** | @{items('For_Each_Deferred_Record')['createdAt']} |\n| **Days Deferred** | @{outputs('Compute_Record_Age_Days')} |\n\n**Action required:** Review and resolve this long-standing deferred vulnerability.",
+                                "labels": ["sentinel/escalate", "sentinel/90-day-overdue"],
+                                "assignees": ["[parameters('securityTeamLeadLogin')]"]
+                              }
+                            }
+                          }
+                        },
+                        "else": {
+                          "actions": {}
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "outputs": {}
+        },
+        "parameters": {}
+      },
+      "tags": {
+        "project": "sentinel-d",
+        "component": "backlog-rescan"
+      }
+    },
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2019-05-01",
+      "name": "[parameters('weeklyDigestLogicAppName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "state": "Enabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.0.0.0",
+          "triggers": {
+            "Weekly_Monday_0700_UTC": {
+              "type": "Recurrence",
+              "recurrence": {
+                "frequency": "Week",
+                "interval": 1,
+                "schedule": {
+                  "weekDays": ["Monday"],
+                  "hours": [7],
+                  "minutes": [0]
+                },
+                "timeZone": "UTC"
+              }
+            }
+          },
+          "actions": {
+            "List_All_Deferred": {
+              "type": "Http",
+              "runAfter": {},
+              "inputs": {
+                "method": "GET",
+                "uri": "[concat('https://', split(split(parameters('tableStorageConnectionString'), 'AccountName=')[1], ';')[0], '.table.core.windows.net/', variables('tableName'), '?$filter=PartitionKey%20eq%20%27deferred%27')]",
+                "headers": {
+                  "Accept": "application/json;odata=nometadata",
+                  "x-ms-date": "@{utcNow('R')}",
+                  "x-ms-version": "2020-12-06"
+                },
+                "authentication": {
+                  "type": "Raw",
+                  "value": "[parameters('tableStorageConnectionString')]"
+                }
+              }
+            },
+            "Check_Has_Records": {
+              "type": "If",
+              "runAfter": {
+                "List_All_Deferred": ["Succeeded"]
+              },
+              "expression": {
+                "and": [
+                  {
+                    "greater": [
+                      "@length(body('List_All_Deferred')['value'])",
+                      0
+                    ]
+                  }
+                ]
+              },
+              "actions": {
+                "Build_Digest_Table": {
+                  "type": "Select",
+                  "runAfter": {},
+                  "from": "@body('List_All_Deferred')['value']",
+                  "select": {
+                    "row": "| `@{item()['cveId']}` | `@{item()['RowKey']}` | @{item()['severity']} | @{div(sub(ticks(utcNow()), ticks(item()['createdAt'])), 864000000000)} days | @{sub(90, div(sub(ticks(utcNow()), ticks(item()['createdAt'])), 864000000000))} days |"
+                  }
+                },
+                "Create_Weekly_Digest_Issue": {
+                  "type": "Http",
+                  "runAfter": {
+                    "Build_Digest_Table": ["Succeeded"]
+                  },
+                  "inputs": {
+                    "method": "POST",
+                    "uri": "[concat(variables('githubApiBase'), '/repos/', parameters('githubOwner'), '/', parameters('githubRepo'), '/issues')]",
+                    "headers": {
+                      "Authorization": "[concat('Bearer ', parameters('githubToken'))]",
+                      "Accept": "application/vnd.github.v3+json",
+                      "User-Agent": "Sentinel-D-WeeklyDigest"
+                    },
+                    "body": {
+                      "title": "[Sentinel-D Weekly] Deferred Vulnerability Summary — @{formatDateTime(utcNow(), 'yyyy-MM-dd')}",
+                      "body": "## 📋 Weekly Deferred Vulnerability Digest\n\n**Total deferred:** @{length(body('List_All_Deferred')['value'])} vulnerabilities\n\n| CVE ID | Event ID | Severity | Age | Days to 90-day Escalation |\n|--------|----------|----------|-----|---------------------------|\n@{join(body('Build_Digest_Table')?.map(item => item.row), '\n')}\n\n---\n\n*Generated by Sentinel-D Backlog Re-Scan at @{utcNow()}*",
+                      "labels": ["sentinel/weekly-digest"]
+                    }
+                  }
+                }
+              },
+              "else": {
+                "actions": {}
+              }
+            }
+          },
+          "outputs": {}
+        },
+        "parameters": {}
+      },
+      "tags": {
+        "project": "sentinel-d",
+        "component": "weekly-digest"
+      }
+    }
+  ],
+  "outputs": {
+    "dailyRescanLogicAppId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Logic/workflows', parameters('logicAppName'))]"
+    },
+    "weeklyDigestLogicAppId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Logic/workflows', parameters('weeklyDigestLogicAppName'))]"
+    }
+  }
+}

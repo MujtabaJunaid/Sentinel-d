@@ -8,6 +8,7 @@
  */
 
 const { Octokit } = require("@octokit/rest");
+const { withRetry } = require("../shared/retry");
 require("dotenv").config();
 
 /**
@@ -115,22 +116,28 @@ async function createPR(candidatePatch, validationBundle, compositeScore, tier) 
       ? ["sentinel/auto-approve"]
       : ["sentinel/needs-review"];
 
-  const { data: pr } = await octokit.rest.pulls.create({
-    owner: GITHUB_OWNER,
-    repo: GITHUB_REPO,
-    title,
-    body,
-    head: branchName,
-    base: "main",
-  });
+  const { data: pr } = await withRetry(
+    () => octokit.rest.pulls.create({
+      owner: GITHUB_OWNER,
+      repo: GITHUB_REPO,
+      title,
+      body,
+      head: branchName,
+      base: "main",
+    }),
+    { label: "github-create-pr" }
+  );
 
   // Add labels
-  await octokit.rest.issues.addLabels({
-    owner: GITHUB_OWNER,
-    repo: GITHUB_REPO,
-    issue_number: pr.number,
-    labels,
-  });
+  await withRetry(
+    () => octokit.rest.issues.addLabels({
+      owner: GITHUB_OWNER,
+      repo: GITHUB_REPO,
+      issue_number: pr.number,
+      labels,
+    }),
+    { label: "github-add-labels" }
+  );
 
   // Enable auto-merge for HIGH tier only
   if (tier === "HIGH") {
