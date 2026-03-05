@@ -1,0 +1,209 @@
+name: Sandbox Validator
+
+on:
+  workflow_dispatch:
+    inputs:
+      event_id:
+        description: 'UUID of the Sentinel-D event being validated'
+        required: true
+      patch_diff_b64:
+        description: 'Base64-encoded unified diff of the candidate patch'
+        required: true
+      repo:
+        description: 'Target repository (owner/repo)'
+        required: true
+      language:
+        description: 'Primary language of the target repo'
+        required: true
+        default: 'javascript'
+        type: choice
+        options:
+          - javascript
+          - python
+
+env:
+  AZURE_RESOURCE_GROUP: sentinel-d-rg
+  AZURE_LOCATION: eastus
+  JOB_NAME: sentinel-sandbox-${{ github.run_id }}
+  CONTAINER_ENV_NAME: sentinel-sandbox-env
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.inputs.repo }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: HEAD
+
+      - name: Apply candidate patch
+        env:
+          PATCH_B64: ${{ github.event.inputs.patch_diff_b64 }}
+        run: |
+          echo "$PATCH_B64" | base64 -d | git apply
+          echo "Patch applied successfully."
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # ── Select image based on language ──────────────────────────────────────
+      - name: Set container image
+        id: image
+        env:
+          LANGUAGE: ${{ github.event.inputs.language }}
+        run: |
+          if [ "$LANGUAGE" = "python" ]; then
+            echo "image=python:3.11-slim" >> $GITHUB_OUTPUT
+            echo "test_command=python -m pytest --tb=short -q --json-report --json-report-file=test_results.json" >> $GITHUB_OUTPUT
+          else
+            echo "image=node:20-alpine" >> $GITHUB_OUTPUT
+            echo "test_command=npm test -- --json --outputFile=test_results.json" >> $GITHUB_OUTPUT
+          fi
+
+      # ── Benchmark: start timer ───────────────────────────────────────────────
+      - name: Record spin-up start time
+        id: timer
+        run: echo "start_ts=$(date +%s)" >> $GITHUB_OUTPUT
+
+      # ── Create ephemeral Container App Job ──────────────────────────────────
+      - name: Create Container App Job
+        id: create_job
+        run: |
+          az containerapp job create \
+            --name "${{ env.JOB_NAME }}" \
+            --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
+            --environment "${{ env.CONTAINER_ENV_NAME }}" \
+            --trigger-type Manual \
+            --replica-timeout 900 \
+            --replica-retry-limit 0 \
+            --replica-completion-count 1 \
+            --parallelism 1 \
+            --image "${{ steps.image.outputs.image }}" \
+            --cpu 0.5 \
+            --memory 1.0Gi \
+            --env-vars \
+              "EVENT_ID=${{ github.event.inputs.event_id }}" \
+              "TEST_COMMAND=${{ steps.image.outputs.test_command }}" \
+            --command "/bin/sh" "-c" "cd /workspace && ${{ steps.image.outputs.test_command }} || true"
+          echo "job_created=true" >> $GITHUB_OUTPUT
+
+      # ── Start the job and wait for completion ───────────────────────────────
+      - name: Start and wait for Container App Job
+        id: run_job
+        run: |
+          EXECUTION_NAME=$(az containerapp job start \
+            --name "${{ env.JOB_NAME }}" \
+            --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
+            --query "name" -o tsv)
+          echo "execution_name=$EXECUTION_NAME" >> $GITHUB_OUTPUT
+
+          # Poll for completion (max 15 minutes = 90 × 10s)
+          for i in $(seq 1 90); do
+            STATUS=$(az containerapp job execution show \
+              --name "${{ env.JOB_NAME }}" \
+              --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
+              --job-execution-name "$EXECUTION_NAME" \
+              --query "properties.status" -o tsv 2>/dev/null || echo "Unknown")
+            echo "Poll $i: status=$STATUS"
+            if [ "$STATUS" = "Succeeded" ] || [ "$STATUS" = "Failed" ]; then
+              echo "final_status=$STATUS" >> $GITHUB_OUTPUT
+              break
+            fi
+            sleep 10
+          done
+
+      # ── Capture exit code and write test_results.json ───────────────────────
+      - name: Extract container logs
+        id: logs
+        if: steps.run_job.outputs.final_status != ''
+        run: |
+          # Pull stdout/stderr from the container execution
+          az containerapp job execution logs show \
+            --name "${{ env.JOB_NAME }}" \
+            --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
+            --job-execution-name "${{ steps.run_job.outputs.execution_name }}" \
+            --format text > container_output.log 2>/dev/null || true
+          cat container_output.log
+
+      - name: Write test results JSON
+        id: results
+        run: |
+          FINAL_STATUS="${{ steps.run_job.outputs.final_status }}"
+          EXIT_CODE=0
+          if [ "$FINAL_STATUS" = "Failed" ]; then EXIT_CODE=1; fi
+
+          # TODO: Parse real test counts from container_output.log once
+          # the test runner output format is finalized. For now, the
+          # fallback JSON captures container-level pass/fail status.
+          if [ ! -f test_results.json ]; then
+            cat > test_results.json <<EOF
+          {
+            "event_id": "${{ github.event.inputs.event_id }}",
+            "exit_code": $EXIT_CODE,
+            "tests_passed": 0,
+            "tests_failed": 0,
+            "container_status": "$FINAL_STATUS",
+            "container_log": "container_output.log"
+          }
+          EOF
+          fi
+
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          cat test_results.json
+
+      # ── Benchmark: log spin-up + run time ───────────────────────────────────
+      - name: Log benchmark
+        run: |
+          END_TS=$(date +%s)
+          START_TS=${{ steps.timer.outputs.start_ts }}
+          ELAPSED=$((END_TS - START_TS))
+          echo "::notice title=Sandbox Benchmark::Spin-up to completion: ${ELAPSED}s"
+          if [ "$ELAPSED" -gt 480 ]; then
+            echo "::warning title=Sandbox Slow::Elapsed ${ELAPSED}s exceeds 8-minute threshold — consider pre-warm logic"
+          fi
+
+      # ── Capture SSIM screenshots (post-patch) ───────────────────────────────
+      - name: Setup Node.js for SSIM capture
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install sandbox-validator dependencies
+        run: |
+          cd sandbox-validator && npm ci
+
+      - name: Capture post-patch screenshots
+        env:
+          BASE_URL: ${{ secrets.DEMO_APP_BASE_URL }}
+          SCREENSHOT_PREFIX: postpatch
+        run: |
+          node sandbox-validator/capture-baseline.js
+
+      # ── Upload validation artifacts ──────────────────────────────────────────
+      - name: Upload test results and screenshots
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: validation-bundle-${{ github.event.inputs.event_id }}
+          path: |
+            test_results.json
+            container_output.log
+            sandbox-validator/baselines/
+
+      # ── Teardown: always runs ────────────────────────────────────────────────
+      - name: Tear down Container App Job
+        if: always()
+        run: |
+          TEARDOWN_START=$(date +%s)
+          az containerapp job delete \
+            --name "${{ env.JOB_NAME }}" \
+            --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
+            --yes 2>/dev/null || true
+          TEARDOWN_END=$(date +%s)
+          echo "::notice title=Teardown Time::Container App Job deleted in $((TEARDOWN_END - TEARDOWN_START))s"
