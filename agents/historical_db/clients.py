@@ -2,40 +2,53 @@
 
 import asyncio
 import logging
+import os
 from typing import Dict, Any, List, Optional
 
-import aiohttp
+from azure.cosmos.aio import CosmosClient, ContainerProxy
+from azure.core.credentials import AzureKeyCredential
+from azure.search.documents.aio import SearchClient
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
 class AsyncCosmosClientWrapper:
-    """Asynchronous wrapper for Cosmos DB queries."""
+    """Asynchronous wrapper for Cosmos DB queries using Azure SDK."""
 
-    def __init__(
-        self,
-        endpoint: str,
-        database: str,
-        container: str,
-        credential_key: str
-    ):
+    def __init__(self):
         """
-        Initialize Cosmos DB client wrapper.
-
-        Args:
-            endpoint: Cosmos DB endpoint URL.
-            database: Database name.
-            container: Container name partitioned by /cve_id.
-            credential_key: Primary or secondary key for authentication.
+        Initialize Cosmos DB client wrapper from environment variables.
+        
+        Reads: COSMOS_DB_ENDPOINT, COSMOS_DB_READ_KEY, COSMOS_DB_NAME, COSMOS_CONTAINER_NAME
         """
-        self.endpoint = endpoint.rstrip("/")
-        self.database = database
-        self.container = container
-        self.credential_key = credential_key
+        self.endpoint = os.getenv("COSMOS_DB_ENDPOINT")
+        self.read_key = os.getenv("COSMOS_DB_READ_KEY")
+        self.database_name = os.getenv("COSMOS_DB_NAME", "sentinel")
+        self.container_name = os.getenv("COSMOS_CONTAINER_NAME", "cve_patches")
+        
+        if not self.endpoint or not self.read_key:
+            raise ValueError(
+                "COSMOS_DB_ENDPOINT and COSMOS_DB_READ_KEY environment variables required"
+            )
+        
+        self.client = None
+        self.container: ContainerProxy = None
         logger.info(
-            f"Initialized AsyncCosmosClientWrapper for {database}/{container}"
+            f"Initialized AsyncCosmosClientWrapper for {self.database_name}/{self.container_name}"
         )
+
+    async def __aenter__(self):
+        """Async context manager entry."""
+        self.client = CosmosClient(self.endpoint, credential=AzureKeyCredential(self.read_key))
+        database = self.client.get_database_client(self.database_name)
+        self.container = database.get_container_client(self.container_name)
+        return self
+
+    async def __aexit__(self, *args):
+        """Async context manager exit."""
+        if self.client:
+            await self.client.close()
 
     async def get_exact_match(self, cve_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -51,53 +64,28 @@ class AsyncCosmosClientWrapper:
         logger.debug(f"Querying Cosmos DB for exact match: {cve_id}")
 
         try:
-            # Construct query URL for Cosmos DB
-            query_url = (
-                f"{self.endpoint}/dbs/{self.database}/colls/{self.container}/docs"
-            )
-            headers = {
-                "Authorization": f"type=master&ver=1.0&sig={self.credential_key}",
-                "x-ms-version": "2020-07-15",
-                "Content-Type": "application/query+json"
-            }
-
-            query_body = {
-                "query": "SELECT * FROM c WHERE c.cve_id = @cve_id AND c.patch_outcome = @outcome",
-                "parameters": [
+            if not self.container:
+                raise RuntimeError("Cosmos DB container not initialized. Use async with context.")
+            
+            # Query for exact CVE match with SUCCESS outcome
+            query = "SELECT * FROM c WHERE c.cve_id = @cve_id AND c.patch_outcome = @outcome"
+            
+            async for item in self.container.query_items(
+                query=query,
+                parameters=[
                     {"name": "@cve_id", "value": cve_id},
                     {"name": "@outcome", "value": "SUCCESS"}
-                ]
-            }
-
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    query_url,
-                    json=query_body,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=10)
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        documents = data.get("Documents", [])
-                        if documents:
-                            logger.info(f"Found exact match in Cosmos DB for {cve_id}")
-                            return documents[0]
-                        else:
-                            logger.debug(f"No exact match found for {cve_id}")
-                            return None
-                    else:
-                        error_msg = await response.text()
-                        logger.warning(f"Cosmos DB query error {response.status}: {error_msg}")
-                        return None
-
-        except asyncio.TimeoutError:
-            logger.error(f"Timeout querying Cosmos DB for {cve_id}")
+                ],
+                max_item_count=1
+            ):
+                logger.info(f"Found exact match in Cosmos DB for {cve_id}")
+                return item
+            
+            logger.debug(f"No exact match found for {cve_id}")
             return None
-        except aiohttp.ClientError as e:
-            logger.error(f"Client error querying Cosmos DB: {e}")
-            return None
+
         except Exception as e:
-            logger.error(f"Unexpected error in Cosmos DB query: {e}")
+            logger.error(f"Error querying Cosmos DB: {str(e)}", exc_info=True)
             return None
 
 
@@ -107,24 +95,28 @@ class AsyncAISearchWrapper:
     SIMILARITY_THRESHOLD = 0.88
     TOP_RESULTS = 3
 
-    def __init__(
-        self,
-        endpoint: str,
-        index_name: str,
-        api_key: str
-    ):
+    def __init__(self):
         """
-        Initialize Azure AI Search client wrapper.
-
-        Args:
-            endpoint: Azure AI Search service endpoint URL.
-            index_name: Name of the search index.
-            api_key: API key for authentication.
+        Initialize Azure AI Search client wrapper from environment variables.
+        
+        Reads: AI_SEARCH_ENDPOINT, AI_SEARCH_API_KEY, AI_SEARCH_INDEX_NAME
         """
-        self.endpoint = endpoint.rstrip("/")
-        self.index_name = index_name
-        self.api_key = api_key
-        logger.info(f"Initialized AsyncAISearchWrapper for index: {index_name}")
+        self.endpoint = os.getenv("AI_SEARCH_ENDPOINT")
+        self.api_key = os.getenv("AI_SEARCH_API_KEY")
+        self.index_name = os.getenv("AI_SEARCH_INDEX_NAME", "cve-patches-index")
+        
+        if not self.endpoint or not self.api_key:
+            raise ValueError(
+                "AI_SEARCH_ENDPOINT and AI_SEARCH_API_KEY environment variables required"
+            )
+        
+        credential = AzureKeyCredential(self.api_key)
+        self.client = SearchClient(
+            endpoint=self.endpoint,
+            index_name=self.index_name,
+            credential=credential
+        )
+        logger.info(f"Initialized AsyncAISearchWrapper for index: {self.index_name}")
 
     async def get_semantic_matches(
         self,
@@ -147,67 +139,78 @@ class AsyncAISearchWrapper:
             return []
 
         try:
-            search_url = f"{self.endpoint}/indexes/{self.index_name}/docs/search?api-version=2024-07-01"
-            headers = {
-                "api-key": self.api_key,
-                "Content-Type": "application/json"
-            }
+            # Perform vector search using Azure SDK
+            # Note: SearchClient.search_async() requires async context
+            results = []
+            
+            # Use synchronous client wrapped in async context
+            # This is simplified for production; consider using httpx for true async
+            async def _search():
+                search_results = self.client.search(
+                    search_text="",  # Empty text for pure vector search
+                    vector=embedding,
+                    vector_fields="cve_description_embedding",
+                    k=self.TOP_RESULTS,
+                    select=["id", "cve_id", "record_id", "patch_id", "affected_package",
+                            "patch_outcome", "patch_diff", "recommended_strategy", 
+                            "solutions_tried"],
+                )
+                
+                docs = []
+                async for result in search_results:
+                    score = result.get("@search.score", 0.0)
+                    if score >= self.SIMILARITY_THRESHOLD:
+                        docs.append({
+                            "id": result.get("id", ""),
+                            "cve_id": result.get("cve_id", ""),
+                            "record_id": result.get("record_id", ""),
+                            "patch_id": result.get("patch_id", ""),
+                            "affected_package": result.get("affected_package", ""),
+                            "patch_outcome": result.get("patch_outcome", ""),
+                            "patch_diff": result.get("patch_diff", ""),
+                            "recommended_strategy": result.get("recommended_strategy", ""),
+                            "solutions_tried": result.get("solutions_tried", []),
+                            "similarity_score": score
+                        })
+                return docs
+            
+            # Run search in thread pool to avoid blocking
+            import concurrent.futures
+            loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                docs = await loop.run_in_executor(
+                    pool,
+                    lambda: self.client.search(
+                        search_text="",
+                        vector=embedding,
+                        vector_fields="cve_description_embedding",
+                        k=self.TOP_RESULTS,
+                        select=["id", "cve_id", "record_id", "patch_id", "affected_package",
+                                "patch_outcome", "patch_diff", "recommended_strategy", 
+                                "solutions_tried"],
+                    )
+                )
+            
+            filtered_docs = []
+            for result in docs:
+                score = result.get("@search.score", 0.0)
+                if score >= self.SIMILARITY_THRESHOLD:
+                    filtered_docs.append({
+                        "id": result.get("id", ""),
+                        "cve_id": result.get("cve_id", ""),
+                        "record_id": result.get("record_id", ""),
+                        "patch_id": result.get("patch_id", ""),
+                        "affected_package": result.get("affected_package", ""),
+                        "patch_outcome": result.get("patch_outcome", ""),
+                        "patch_diff": result.get("patch_diff", ""),
+                        "recommended_strategy": result.get("recommended_strategy", ""),
+                        "solutions_tried": result.get("solutions_tried", []),
+                        "similarity_score": score
+                    })
+            
+            logger.info(f"Found {len(filtered_docs)} semantic matches above threshold {self.SIMILARITY_THRESHOLD}")
+            return filtered_docs[:self.TOP_RESULTS]
 
-            search_body = {
-                "vectors": [
-                    {
-                        "value": embedding,
-                        "fields": "embedding_vector",
-                        "k": self.TOP_RESULTS
-                    }
-                ],
-                "select": "*",
-                "top": self.TOP_RESULTS
-            }
-
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    search_url,
-                    json=search_body,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=15)
-                ) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        documents = result.get("value", [])
-
-                        # Filter by similarity threshold and score
-                        filtered_docs = []
-                        for doc in documents:
-                            score = doc.get("@search.score", 0.0)
-                            # AI Search returns similarity score; filter by threshold
-                            if score >= self.SIMILARITY_THRESHOLD:
-                                filtered_docs.append({
-                                    "id": doc.get("id", ""),
-                                    "cve_id": doc.get("cve_id", ""),
-                                    "record_id": doc.get("record_id", ""),
-                                    "patch_id": doc.get("patch_id", ""),
-                                    "affected_package": doc.get("affected_package", ""),
-                                    "patch_outcome": doc.get("patch_outcome", ""),
-                                    "patch_diff": doc.get("patch_diff", ""),
-                                    "recommended_strategy": doc.get("recommended_strategy", ""),
-                                    "solutions_tried": doc.get("solutions_tried", []),
-                                    "similarity_score": score
-                                })
-
-                        logger.info(f"Found {len(filtered_docs)} semantic matches above threshold")
-                        return filtered_docs[:self.TOP_RESULTS]
-                    else:
-                        error_msg = await response.text()
-                        logger.warning(f"AI Search error {response.status}: {error_msg}")
-                        return []
-
-        except asyncio.TimeoutError:
-            logger.error("Timeout querying Azure AI Search")
-            return []
-        except aiohttp.ClientError as e:
-            logger.error(f"Client error querying AI Search: {e}")
-            return []
         except Exception as e:
-            logger.error(f"Unexpected error in semantic search: {e}")
+            logger.error(f"Error in semantic search: {str(e)}", exc_info=True)
             return []

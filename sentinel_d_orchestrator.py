@@ -11,6 +11,8 @@ import torch
 from transformers import DistilBertForSequenceClassification, DistilBertTokenizer
 from huggingface_hub import hf_hub_download
 
+from agents.nlp_pipeline.ml_models import EntityExtractor, IntentClassifier
+
 
 class SentinelPipeline:
     """
@@ -37,7 +39,7 @@ class SentinelPipeline:
         Initialize the Sentinel Pipeline by loading both fine-tuned models.
         
         Downloads and extracts zipped models from HuggingFace Hub with fallback
-        to local Windows backup paths.
+        to local paths (supports environment variable override).
         
         Args:
             spacy_model_extract_dir: Directory where spaCy NER model is extracted
@@ -48,12 +50,22 @@ class SentinelPipeline:
         """
         print("[SentinelPipeline] Initializing NLP orchestrator...")
         
+        # Get local model paths from environment or use defaults
+        spacy_local_path = os.getenv(
+            "SPACY_MODEL_PATH",
+            os.path.join(os.path.dirname(__file__), "spacy-nvd-ner-v1.zip")
+        )
+        distilbert_local_path = os.getenv(
+            "DISTILBERT_MODEL_PATH",
+            os.path.join(os.path.dirname(__file__), "distilbert-intent-classifier-v1.zip")
+        )
+        
         # ============ Stage 1: Load spaCy NER Model ============
         print("[Stage 1] Loading spaCy NER model...")
         self.spacy_nlp = self._load_spacy_model(
             repo_id="mojad121/spacy-classes-finetune",
             filename="spacy-nvd-ner-v1.zip",
-            local_zip_path=r"C:\Users\hp\Sentinel-d\spacy-nvd-ner-v1.zip",
+            local_zip_path=spacy_local_path,
             extract_dir=spacy_model_extract_dir
         )
         print("[Stage 1] ✓ spaCy NER model loaded successfully\n")
@@ -63,7 +75,7 @@ class SentinelPipeline:
         distilbert_path = self._get_and_extract_model(
             repo_id="mojad121/distill-bert-intent-classifer",
             filename="distilbert-intent-classifier-v1.zip",
-            local_zip_path=r"C:\Users\hp\Sentinel-d\distilbert-intent-classifier-v1.zip",
+            local_zip_path=distilbert_local_path,
             extract_dir=distilbert_model_extract_dir
         )
         
@@ -77,6 +89,13 @@ class SentinelPipeline:
         self.distilbert_model.eval()
         
         print("[Stage 2] ✓ DistilBERT intent classifier loaded successfully\n")
+        
+        # ============ Stage 3: Initialize ML Model Wrappers ============
+        print("[Stage 3] Wiring ML model wrappers...")
+        self.entity_extractor = EntityExtractor(self.spacy_nlp)
+        self.intent_classifier = IntentClassifier(self.distilbert_model, self.distilbert_tokenizer)
+        print("[Stage 3] ✓ ML model wrappers initialized\n")
+        
         print("[SentinelPipeline] ✓ Pipeline initialization complete\n")
     
     def _get_and_extract_model(self, repo_id: str, filename: str, 
@@ -202,10 +221,10 @@ class SentinelPipeline:
         Analyze vulnerability patch requirements using NER and intent classification.
         
         Processing pipeline:
-        1. Entity Extraction (Stage 1): spaCy NER identifies VERSION_RANGE, API_SYMBOL, 
-           BREAKING_CHANGE, FIX_ACTION entities in the input text.
-        2. Intent Classification (Stage 2): DistilBERT predicts the repair intent 
-           (VERSION_PIN, API_MIGRATION, MONKEY_PATCH, FULL_REFACTOR) with confidence score.
+        1. Entity Extraction (Stage 1): Uses EntityExtractor to identify VERSION_RANGE, 
+           API_SYMBOL, BREAKING_CHANGE, FIX_ACTION entities in the input text.
+        2. Intent Classification (Stage 2): Uses IntentClassifier to predict the repair 
+           intent (VERSION_PIN, API_MIGRATION, MONKEY_PATCH, FULL_REFACTOR) with confidence.
         
         Args:
             text: Input text describing the vulnerability or required patch
@@ -221,12 +240,8 @@ class SentinelPipeline:
                         "prediction": "<e.g., VERSION_PIN>",
                         "confidence": <float_0_to_1>
                     },
-                    "entities": {
-                        "VERSION_RANGE": ["<entity1>", "<entity2>", ...],
-                        "API_SYMBOL": [...],
-                        "BREAKING_CHANGE": [...],
-                        "FIX_ACTION": [...]
-                    }
+                    "breaking_changes": [list of breaking change dicts],
+                    "migration_steps": [list of step strings]
                 }
             }
         
@@ -240,40 +255,10 @@ class SentinelPipeline:
         """
         try:
             # ============ Stage 1: Entity Extraction ============
-            # Process text through spaCy NER pipeline
-            doc = self.spacy_nlp(text)
-            
-            # Collect entities grouped by their label
-            entities_by_label = {label: [] for label in self.NER_ENTITIES}
-            for ent in doc.ents:
-                if ent.label_ in entities_by_label:
-                    # Add entity text (avoid duplicates if same entity appears multiple times)
-                    if ent.text not in entities_by_label[ent.label_]:
-                        entities_by_label[ent.label_].append(ent.text)
+            breaking_changes, migration_steps = self.entity_extractor.extract(text)
             
             # ============ Stage 2: Intent Classification ============
-            # Tokenize input text for DistilBERT
-            inputs = self.distilbert_tokenizer(
-                text=text,
-                truncation=True,
-                padding=True,
-                return_tensors="pt"
-            )
-            
-            # Run inference (no gradient computation)
-            with torch.no_grad():
-                outputs = self.distilbert_model(**inputs)
-                logits = outputs.logits
-                
-                # Compute softmax probabilities
-                probabilities = torch.nn.functional.softmax(logits, dim=1)
-                
-                # Extract predicted class and its confidence
-                predicted_class_idx = torch.argmax(probabilities, dim=-1).item()
-                confidence_score = probabilities[0][predicted_class_idx].item()
-            
-            # Map class index to intent label
-            intent_label = self.INTENT_LABELS.get(predicted_class_idx, "UNKNOWN")
+            intent_label, confidence_score = self.intent_classifier.classify(text)
             
             # ============ Build Structured Response ============
             result = {
@@ -285,7 +270,8 @@ class SentinelPipeline:
                         "prediction": intent_label,
                         "confidence": round(confidence_score, 4)
                     },
-                    "entities": entities_by_label
+                    "breaking_changes": breaking_changes,
+                    "migration_steps": migration_steps
                 }
             }
             
