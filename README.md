@@ -20,12 +20,14 @@ GHAS alert → Azure Function → Service Bus → SRE Agent → Human Decision G
 - **Safety Governor**: Four-tier action dispatch (Auto PR / Manual PR / Escalate / Reject)
 - **Historical DB**: Cosmos DB write client, Azure AI Search indexing
 
-### Dev A Components (ML/NLP)
-- **NLP Pipeline**: spaCy NER, DistilBERT intent classifier, embedding generation.
-  Link to models:
-  1) https://huggingface.co/mojad121/spacy-classes-finetune/tree/main
-  2) https://huggingface.co/mojad121/distill-bert-intent-classifer/tree/main 
-- **Patch Generator**: FOUNDRY/RAG replay, four-section prompt design, composite scoring
+### Dev A Components (ML/NLP Pipeline & Intelligence)
+- **NLP Context Orchestrator**: Parallel async fetchers for NVD 2.0 and Stack Exchange APIs to assemble structured vulnerability context.
+- **Machine Learning Models**: Fine-tuned spaCy NER (entity extraction for breaking changes/APIs) and DistilBERT (community fix intent classification).
+  - *spaCy NER Model*: [Hugging Face Repository](https://huggingface.co/mojad121/spacy-classes-finetune/tree/main)
+  - *DistilBERT Intent Classifier*: [Hugging Face Repository](https://huggingface.co/mojad121/distill-bert-intent-classifer/tree/main)
+- **Patch Generator Agent**: Azure OpenAI (Foundry) integration utilizing a heavily constrained, four-section chain-of-thought prompt architecture.
+- **Confidence Scorer**: Composite evaluation mathematical formula weighing LLM log probabilities, constraint adherence, and NLP intent alignment.
+- **Historical DB (Read Path)**: Two-stage asynchronous lookup engine (Cosmos DB exact match + Azure AI Search semantic vector search) and text embedding generation.
 
 ### Shared Components
 - **Historical DB**: Read client (Dev A), Write client (Dev B)
