@@ -12,7 +12,7 @@
   "dependencies": {
     "@azure/cosmos": "^4.0.0",
     "@azure/data-tables": "^13.2.0",
-    "@azure/identity": "^4.0.0",
+    "@azure/identity": "^4.13.1",
     "ajv": "^8.12.0",
     "ajv-formats": "^2.1.1",
     "dotenv": "^17.0.0"
